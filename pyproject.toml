@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "website-monitor-cli"
 version = "0.1.0"
-description = "Boilerplate for building polished Python CLI tools."
+description = "CLI tool to monitor websites by validating URLs and checking HTTP success status responses. Configurable defaults for intervals and status codes."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-website-monitor = "cli_boilerplate.main:main"
+website-monitor = "website_monitor_cli.main:main"
 
 [dependency-groups]
 dev = [
@@ -41,4 +41,4 @@ strict = true
 files = ["src"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cli_boilerplate"]
+packages = ["src/website_monitor_cli"]

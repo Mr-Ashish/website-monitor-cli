@@ -1,4 +1,4 @@
-"""CLI boilerplate package."""
+"""Website Monitor CLI package."""
 
 __all__ = ["__version__"]
 
