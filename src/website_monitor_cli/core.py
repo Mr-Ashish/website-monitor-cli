@@ -167,12 +167,16 @@ def start_background(url: str, config: Config) -> dict[str, Any]:
     if not is_valid_url(url):
         return {"error": "Invalid URL", "success": False}
 
+    # Generate job_id here (parent); passed to child watch via --job-id to sync
+    # (prevents mismatch bug where child re-generated UUID -> missing log/PID
+    # files + empty entries[] in compute_job_stats/details/logs).
     job_id = get_job_id(url)
     log_file = get_log_file(config, job_id)
     pid_file = get_pid_file(config, job_id)
 
     # Build cmd to re-run watch without --background (to avoid re-daemon)
     # Use -m for module to work installed/editable
+    # Pass --job-id (hidden) to ensure parent/child use same ID for logs/PID.
     cmd = [
         sys.executable,
         "-m",
@@ -184,6 +188,8 @@ def start_background(url: str, config: Config) -> dict[str, Any]:
         str(config.check_interval),
         "--timeout",
         str(config.timeout),
+        "--job-id",
+        job_id,  # Sync for bg daemon child
         # no --max-checks for ongoing bg
     ]
 
@@ -216,8 +222,36 @@ def start_background(url: str, config: Config) -> dict[str, Any]:
     return job_data
 
 
-def stop_job(job_id: str, config: Config) -> bool:
-    """Stop bg job by PID (SIGTERM then SIGKILL if needed)."""
+def resolve_job_id(identifier: str, config: Config) -> str:
+    """Resolve input as job_id (str) or PID (str/int) to canonical job_id.
+
+    Scans running/completed bg jobs via list_jobs() and PID files. Enables
+    PID-based mgmt for logs/details/stop (e.g., 'monitor logs <pid>') while
+    keeping job_id backward-compatible.
+
+    Falls back to treating identifier as job_id if no PID match (e.g., dead
+    jobs where PID file still exists by job_id).
+    """
+    # Try as PID first (int match)
+    try:
+        pid_int = int(identifier)
+        for job in list_jobs(config):
+            if job.get("pid") == pid_int:
+                return job.get("job_id")
+    except ValueError:
+        pass  # Not numeric PID; fall through
+
+    # Default/fallback: assume identifier is already job_id
+    return identifier
+
+
+def stop_job(identifier: str, config: Config) -> bool:
+    """Stop bg job by job_id (from status) *or* PID.
+
+    Resolves via resolve_job_id(); then stops via SIGTERM/SIGKILL.
+    """
+    # Resolve PID -> job_id if needed
+    job_id = resolve_job_id(identifier, config)
     pid_file = get_pid_file(config, job_id)
     if not pid_file.exists():
         return False
@@ -239,8 +273,14 @@ def stop_job(job_id: str, config: Config) -> bool:
         return False
 
 
-def get_job_logs(job_id: str, config: Config, lines: int = 20) -> str:
-    """Tail recent logs from job's log file."""
+def get_job_logs(identifier: str, config: Config, lines: int = 20) -> str:
+    """Tail recent logs from job's log file.
+
+    Accepts job_id (from status) *or* PID (resolves via resolve_job_id()).
+    Enables e.g. 'monitor logs <pid>'.
+    """
+    # Resolve PID -> job_id if provided
+    job_id = resolve_job_id(identifier, config)
     log_file = get_log_file(config, job_id)
     if not log_file.exists():
         return "No logs found."
@@ -300,52 +340,109 @@ def log_check_result(
             log_file.write_text("\n".join(lines[-config.max_log_entries:]) + "\n")
 
 
-def compute_job_stats(job_id: str, config: Config) -> dict[str, Any]:
-    """Compute stats from job's log history (multiple entries over time).
+def compute_job_stats(identifier: str, config: Config) -> dict[str, Any]:
+    """Compute cumulated stats from job's log history + metadata (for details dashboard).
 
-    Returns: uptime_pct, avg_response_time, last_ping, next_ping, total_checks,
-    success_count, period_start/end.
-    Enables detailed status screen.
+    Accepts job_id *or* PID (resolves via resolve_job_id()).
+
+    Returns enriched dict for dashboard:
+    - start_time (pref PID file, fallback logs), next_run_time, uptime_pct (from start),
+    - total_pings (=total_checks), failures (=total-successes), URL (from logs/PID).
+    - Other: avg_resp, last_ping, success_count, period, etc.
+    Fixed data flow for URL (even post-stop, no PID file) + error details.
+    Enables full cumulated details dashboard in UI.
     """
-    log_file = get_log_file(config, job_id)
-    if not log_file.exists():
-        return {"error": "No log history", "total_checks": 0}
+    # Resolve PID -> job_id if provided
+    job_id = resolve_job_id(identifier, config)
 
-    entries = []
-    for line in log_file.read_text().splitlines():
+    # Load job metadata from PID file (for start_time/URL; note: unlinked on stop)
+    pid_file = get_pid_file(config, job_id)
+    job_data = {}
+    if pid_file.exists():
         try:
-            entries.append(json.loads(line))
+            job_data = json.loads(pid_file.read_text())
         except json.JSONDecodeError:
-            pass  # Skip corrupt
+            pass
+
+    # Logs for history/stats (pings, uptime, failures; *always* has URL in entries)
+    # Robust parse: skip empty/corrupt (fixes cases where trim/rotate/partial write
+    # left bad lines; ensures entries populated when log/PID files exist).
+    log_file = get_log_file(config, job_id)
+    entries = []
+    if log_file.exists():
+        for line in log_file.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue  # Skip empty (e.g., from trim)
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass  # Skip corrupt
 
     if not entries:
-        return {"error": "Empty history", "total_checks": 0}
+        # Graceful for new/empty: return PID metadata + explicit error for UI
+        # (PID may be absent post-stop, but error details passed through)
+        # Durations=0 for format helpers
+        return {
+            "error": "Empty history (no checks logged yet)",
+            "total_checks": 0,
+            "start_time": job_data.get("started_at"),
+            "job_id": job_id,
+            "url": job_data.get("url"),  # PID fallback
+            # Readable durations
+            "time_since_start_seconds": 0,
+            "next_run_in_seconds": 0,
+            # Full error preserved for dashboard warn
+        }
 
-    # Stats calc
-    total = len(entries)
+    # Cumulated stats calc (from start; URL always from logs entries for reliability)
+    total = len(entries)  # = total_pings
     successes = sum(1 for e in entries if e.get("success"))
+    failures = total - successes
     uptime_pct = round((successes / total) * 100, 2) if total else 0.0
     resp_times = [e.get("response_time", 0) for e in entries if e.get("response_time")]
     avg_resp = round(mean(resp_times), 3) if resp_times else 0.0
 
-    # Ping times
+    # Times/pings; URL from first log entry (persists even if PID file deleted on stop)
     timestamps = sorted(e.get("timestamp", 0) for e in entries)
     last_ping = datetime.fromtimestamp(timestamps[-1]).isoformat() if timestamps else None
-    # Next estimated = last + interval (from job config or default)
+    # Next run est. = last + interval (from job config or default)
     interval = entries[-1].get("config", {}).get("interval", config.check_interval) if entries else config.check_interval
-    next_ping = (
+    next_run_time = (
         datetime.fromtimestamp(timestamps[-1] + interval).isoformat()
         if timestamps
         else None
     )
+    # Period from first log
+    period_start = datetime.fromtimestamp(timestamps[0]).isoformat() if timestamps else None
+    period_end = last_ping
+    # URL: prefer logs (reliable post-stop), fallback PID metadata
+    url_from_logs = entries[0].get("url") if entries else None
+
+    # For user-friendly display: calc durations (seconds since start, to next run)
+    # (Used in UI format_duration; timestamps kept ISO for parse, but deltas humanized)
+    now_ts = datetime.now().timestamp()
+    start_ts = timestamps[0] if timestamps else None
+    time_since_start = (now_ts - start_ts) if start_ts else 0
+    next_in_seconds = (timestamps[-1] + interval - now_ts) if timestamps else 0
 
     return {
-        "total_checks": total,
+        # Cumulated dashboard fields (as requested; fixed data flow)
+        "start_time": job_data.get("started_at") or period_start,
+        "next_run_time": next_run_time,
+        "uptime_pct": uptime_pct,  # From start
+        "total_pings": total,  # = total_checks
         "success_count": successes,
-        "uptime_pct": uptime_pct,
+        "failures": failures,  # Added
+        # Readable durations (for dashboard)
+        "time_since_start_seconds": time_since_start,
+        "next_run_in_seconds": max(0, next_in_seconds),  # No negative
+        # Existing/enriched
         "avg_response_time": avg_resp,
         "last_ping": last_ping,
-        "next_ping": next_ping,
-        "period_start": datetime.fromtimestamp(timestamps[0]).isoformat() if timestamps else None,
-        "period_end": last_ping,
+        "period_start": period_start,
+        "period_end": period_end,
+        "total_checks": total,
+        "job_id": job_id,  # For UI
+        "url": url_from_logs or job_data.get("url"),  # Fixed: logs priority
     }

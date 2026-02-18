@@ -1,6 +1,7 @@
 """Shared Rich console and output helpers."""
 
 from typing import Any
+from datetime import datetime, timedelta  # For human-readable timestamps/durations in dashboard
 
 from rich.console import Console
 from rich.panel import Panel
@@ -11,6 +12,47 @@ from website_monitor_cli.config import Config
 from website_monitor_cli.core import compute_job_stats
 
 console = Console()
+
+
+def format_timestamp(iso_str: str | None) -> str:
+    """Format ISO timestamp to user-friendly string (e.g., '2024-02-17 21:52:06').
+
+    Fallback for None/invalid; keeps dashboard readable.
+    """
+    if not iso_str:
+        return "N/A"
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", ""))  # Handle ISO variants
+        return dt.strftime("%Y-%m-%d %H:%M:%S")  # Simple, readable local
+    except Exception:
+        return str(iso_str)  # Fallback
+
+
+def format_duration(seconds: float | int | None) -> str:
+    """Format seconds to human-readable duration (e.g., '2 days 3h 45m 12s').
+
+    Used for elapsed time, time to next run, uptime deltas etc. in dashboard.
+    Handles <1min, days+; stdlib timedelta for accuracy.
+    """
+    if seconds is None or seconds < 0:
+        return "N/A"
+    try:
+        delta = timedelta(seconds=float(seconds))
+        days = delta.days
+        hours, remainder = divmod(delta.seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        parts = []
+        if days > 0:
+            parts.append(f"{days} day{'s' if days != 1 else ''}")
+        if hours > 0:
+            parts.append(f"{hours}h")
+        if minutes > 0:
+            parts.append(f"{minutes}m")
+        if secs > 0 or not parts:  # Always show secs if <1min
+            parts.append(f"{secs}s")
+        return " ".join(parts)
+    except Exception:
+        return f"{seconds}s"  # Fallback
 
 
 def print_info(message: str) -> None:
@@ -102,12 +144,16 @@ def print_jobs(jobs: list[dict[str, Any]]) -> None:
             job.get("log_file", "N/A"),
         )
     console.print(table)
-    print_success(f"Found {len(jobs)} job(s). Use 'details <job-id>' for full stats (avg resp, pings etc.).")
+    # PID support: users can now use PID for details/logs/stop
+    print_success(f"Found {len(jobs)} job(s). Use 'details <job-id|pid>' for full stats (avg resp, pings etc.).")
 
 
 
 def print_logs(log_output: str, job_id: str) -> None:
-    """Print job logs (tail) with header for bg job debugging."""
+    """Print job logs (tail) with header for bg job debugging.
+
+    job_id param accepts job_id *or* PID (resolved upstream in core).
+    """
     print_info(f"Logs for job {job_id} (recent lines):")
     # Echo raw logs (check results, errors)
     console.print(log_output or "No log content.")
@@ -115,33 +161,76 @@ def print_logs(log_output: str, job_id: str) -> None:
 
 
 def print_job_details(stats: dict[str, Any], job_id: str) -> None:
-    """Rich details screen (table + panel) for a specific job ID.
+    """Cumulated details *dashboard* for a single job (Rich tables + panels).
 
-    Shows full stats de-cluttered from status: uptime, avg resp time,
-    last/next ping, checks, period. Per-job deep view.
-    Gracefully handles empty/new job (no error; info/warn instead).
+    Accepts job_id *or* PID (resolved upstream via core.resolve_job_id).
+    Shows all cumulated details from start: start_time, next_run_time, uptime %,
+    total_pings, failures, successes, avg resp, etc. (enhanced from prior list).
+
+    Per-job dashboard view (de-clutters status; pulls PID metadata + log history).
+    Gracefully handles empty/new job (partial dashboard from metadata + warn).
     """
+    # Always show core job info (even for empty history; fixed data flow from logs/PID)
+    # URL prioritized from logs entries (persists post-stop); start_time from PID/log.
+    # Error details always included for user visibility (no hidden issues).
+    job_url = stats.get("url", "N/A")
+    start_time = stats.get("start_time", "N/A")
+    console.print(Panel.fit(
+        f"Job: {job_id}\nURL: {job_url}\nStarted: {start_time}",
+        title="📊 Job Dashboard Overview",
+        border_style="bold blue",
+    ))
+
     if "error" in stats:
-        # Not error for fresh jobs (e.g., before first ping); warn + guide
-        print_warning(f"No history yet for job {job_id}: {stats['error']}")
-        print_info("Tip: Job too new? Wait one interval or run a check. Logs build over time.")
+        # Partial dashboard for fresh/empty; *print full error* + guide for visibility
+        # (e.g., "Empty history..." so user knows exact issue; no silent N/A)
+        print_warning(f"{stats['error']} for job {job_id} (partial dashboard shown)")
+        print_info("Tip: Job too new? Wait one interval or run a check. Logs build over time for full stats.")
+        # Error details panel for clarity
+        console.print(Panel.fit(
+            f"Issue: {stats['error']}\nJob ID/PID: {job_id}\nURL (if avail): {job_url}",
+            title="Error Details",
+            border_style="yellow",
+        ))
+        # Still show guide panel
+        console.print(Panel.fit(
+            "Run 'monitor logs <job-id|pid>' for raw checks or wait for pings.",
+            title="Next Steps",
+        ))
         return
 
-    # Table for stats
-    table = Table(title=f"Detailed Stats for Job {job_id}")
+    # Main dashboard table: cumulated details with user-friendly times/durations
+    # (e.g., '2024-02-17 21:52:06', '2 days 3h 45m 12s'; uses helpers for readability)
+    table = Table(title=f"Cumulated Stats for Job {job_id}", show_header=True)
     table.add_column("Metric", style="bold")
-    table.add_column("Value")
-    table.add_row("Uptime %", f"{stats.get('uptime_pct', 0):.2f}%")
+    table.add_column("Value", style="cyan")
+    # Timestamps formatted readable
+    table.add_row("Start Time", format_timestamp(stats.get("start_time")))
+    table.add_row("Next Run Time", format_timestamp(stats.get("next_run_time")))
+    # Durations in days/h/m/s
+    table.add_row("Time Since Start", format_duration(stats.get("time_since_start_seconds")))
+    table.add_row("Next Run In", format_duration(stats.get("next_run_in_seconds")))
+    table.add_row("Uptime % (from start)", f"{stats.get('uptime_pct', 0):.2f}%")
+    table.add_row("Total Pings", str(stats.get("total_pings", 0)))
+    table.add_row("Successes", str(stats.get("success_count", 0)))
+    table.add_row("Failures", str(stats.get("failures", 0)))  # Cumulated
     table.add_row("Avg Response Time", f"{stats.get('avg_response_time', 0):.3f}s")
-    table.add_row("Last Ping", stats.get("last_ping", "N/A"))
-    table.add_row("Next Ping (est.)", stats.get("next_ping", "N/A"))
-    table.add_row("Total Checks", str(stats.get("total_checks", 0)))
-    table.add_row("Success Count", str(stats.get("success_count", 0)))
+    table.add_row("Last Ping", format_timestamp(stats.get("last_ping")))
     console.print(table)
 
-    # Summary panel
-    period = f"{stats.get('period_start', 'N/A')} to {stats.get('period_end', 'N/A')}"
-    console.print(Panel.fit(period, title="Monitoring Period"))
+    # History/period panel + summary (format timestamps readable)
+    period_start = format_timestamp(stats.get("period_start"))
+    period_end = format_timestamp(stats.get("period_end"))
+    console.print(Panel.fit(
+        f"{period_start} to {period_end}",
+        title="Monitoring Period",
+        border_style="green",
+    ))
 
-    print_success("Details screen complete. Use 'status' for overview or 'logs' for raw data.")
+    # Final summary panel
+    console.print(Panel.fit(
+        f"View raw: 'monitor logs <job-id|pid>' | Overview: 'monitor status'",
+        title="Dashboard Summary",
+    ))
+    print_success("Cumulated job dashboard complete.")
 

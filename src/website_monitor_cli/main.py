@@ -10,6 +10,7 @@ from website_monitor_cli.commands.monitor import app as monitor_app
 
 # Epilog with sample/copyable commands for root --help (Rich markup enabled;
 # appears at bottom of `website-monitor --help` for easy user onboarding)
+# Updated for PID support in logs/details/stop (convenience for bg job mgmt).
 SAMPLE_COMMANDS = """
 **Quick Start Examples** (copy and run these):
 
@@ -24,8 +25,9 @@ SAMPLE_COMMANDS = """
 
 - Manage background jobs:  
   `website-monitor monitor status`  
-  `website-monitor monitor logs <job-id>`  
-  `website-monitor monitor stop <job-id>`
+  `website-monitor monitor logs <job-id|pid>`  # Supports PID too  
+  `website-monitor monitor details <job-id|pid>`  # Full stats by PID  
+  `website-monitor monitor stop <job-id|pid>`
 
 See `monitor --help` or README for all options/config (e.g., success status codes, bg PID/logs).
 """
