@@ -35,3 +35,14 @@ class Config:
     # Log rotate interval in seconds (e.g., daily; creates timestamped logs if hit)
     # 0 = disabled (single append-only log)
     log_rotate_interval: int = 86400  # 24h
+
+    # Webhook settings for failure notifications
+    # URL to POST to when a check fails (None = disabled)
+    webhook_url: str | None = None
+    # Custom payload template for webhook (None = default JSON payload)
+    # Supports placeholders: {url}, {status_code}, {error}, {timestamp}, {response_time}
+    webhook_payload: str | None = None
+
+    # SSL/TLS settings
+    # Verify SSL certificates for HTTPS requests? (False = default/bypass, True = verify)
+    verify_ssl: bool = False

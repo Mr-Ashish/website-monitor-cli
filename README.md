@@ -8,9 +8,10 @@ A CLI tool to monitor websites: validate URLs, perform HTTP checks, and continuo
 - HTTP status checks using stdlib (configurable success codes like 2xx).
 - Default config values: check_interval=60s, success_status_codes={200,201,202,204}, timeout=10s + bg settings (PID/logs dirs).
 - Single `check`, `watch` (fg/bg daemon) for monitoring.
+- **Webhook notifications on failure** - configure a URL to receive POST requests when checks fail.
 - Bg job management: `status`, `stop <job-id|pid>`, `logs <job-id|pid>`, `details <job-id|pid>` (detached via subprocess/PID files; PID support + cumulated dashboard for details: start_time, uptime, failures, pings etc.).
 - Rich tables/panels for checks/jobs/logs/dashboard; root --help epilog with copyable samples.
-- **All options explicitly documented** in CLI --help (e.g., --timeout, --interval, --background/-b; now supports PID for logs/details/stop + full dashboard stats) .
+- **All options explicitly documented** in CLI --help (e.g., --timeout, --interval, --background/-b, --webhook-url; now supports PID for logs/details/stop + full dashboard stats) .
 - Clean Typer structure, uv/pip setup, tests/lint/typecheck.
 
 ## Quick Start
@@ -98,6 +99,8 @@ tests/
 - Quick check: `website-monitor monitor check <url> --timeout 5`
 - Continuous monitor (fg): `website-monitor monitor watch <url> --interval 30`
 - Bg daemon job: `website-monitor monitor watch <url> --background` (starts detached; check `status`)
+- **With webhook on failure**: `website-monitor monitor watch <url> --webhook-url https://hooks.example.com/alert`
+- **Custom webhook payload**: `website-monitor monitor watch <url> --webhook-url https://hooks.example.com/alert --webhook-payload '{"site":"{url}","error":"{error}"}'`
 - Manage bg: `website-monitor monitor status` (quick uptime%), `details <job-id|pid>` (cumulated dashboard: start_time, next_run, uptime % from start, total_pings, failures etc.), `logs <job-id|pid>`, `stop <job-id|pid>`
 - Only valid URLs proceed; success by config status codes; bg uses ~/.website-monitor/ for PID/logs/history (multi-entry over time; PID shortcuts + dashboard for logs/details/stop).
 - Override defaults via CLI options (fully documented in --help).

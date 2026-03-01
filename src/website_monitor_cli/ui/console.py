@@ -1,7 +1,7 @@
 """Shared Rich console and output helpers."""
 
-from typing import Any
 from datetime import datetime, timedelta  # For human-readable timestamps/durations in dashboard
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -229,7 +229,7 @@ def print_job_details(stats: dict[str, Any], job_id: str) -> None:
 
     # Final summary panel
     console.print(Panel.fit(
-        f"View raw: 'monitor logs <job-id|pid>' | Overview: 'monitor status'",
+        "View raw: 'monitor logs <job-id|pid>' | Overview: 'monitor status'",
         title="Dashboard Summary",
     ))
     print_success("Cumulated job dashboard complete.")

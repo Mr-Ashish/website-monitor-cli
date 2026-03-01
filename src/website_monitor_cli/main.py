@@ -5,6 +5,7 @@ from typing import Annotated
 import typer
 
 from website_monitor_cli import __version__
+
 # Import the monitor command group (replaces demo boilerplate)
 from website_monitor_cli.commands.monitor import app as monitor_app
 
@@ -22,6 +23,12 @@ SAMPLE_COMMANDS = """
 
 - Run as background job:  
   `website-monitor monitor watch https://example.com --background`
+
+- Webhook notification on failure:  
+  `website-monitor monitor watch https://example.com --webhook-url https://hooks.example.com/alert`
+
+- Custom webhook payload (JSON):  
+  `website-monitor monitor watch https://example.com --webhook-url ... --webhook-payload '{"site":"{url}","error":"{error}"}'`
 
 - Manage background jobs:  
   `website-monitor monitor status`  

@@ -3,7 +3,10 @@
 Uses stdlib urllib to avoid additional dependencies.
 """
 
+import json
+import ssl
 import time
+from datetime import datetime
 from http import HTTPStatus
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -50,9 +53,14 @@ def check_website(url: str, config: Config | None = None) -> dict[str, Any]:
     headers = {"User-Agent": config.user_agent}
     req = Request(url, headers=headers)
 
+    # SSL context for certificate verification bypass if configured
+    context = None
+    if not config.verify_ssl:
+        context = ssl._create_unverified_context()
+
     start_time = time.time()
     try:
-        with urlopen(req, timeout=config.timeout) as response:
+        with urlopen(req, timeout=config.timeout, context=context) as response:
             status_code = response.getcode()
             response_time = time.time() - start_time
             success = status_code in config.success_status_codes
@@ -93,6 +101,79 @@ def check_website(url: str, config: Config | None = None) -> dict[str, Any]:
             "response_time": round(response_time, 3),
             "error": str(e),
         }
+
+
+def send_webhook_notification(
+    result: dict[str, Any], config: Config
+) -> dict[str, Any]:
+    """Send webhook notification when a check fails.
+
+    Posts to config.webhook_url with payload containing failure details.
+    Supports custom payload template via config.webhook_payload.
+    Returns dict with success status and any error message.
+    """
+    if not config.webhook_url:
+        return {"success": False, "error": "No webhook URL configured"}
+
+    if not is_valid_url(config.webhook_url):
+        return {"success": False, "error": "Invalid webhook URL"}
+
+    # Build payload
+    timestamp = datetime.now().isoformat()
+    status_code = result.get("status_code") or "N/A"
+    error_msg = result.get("error") or "Unknown error"
+    url = result.get("url", "Unknown URL")
+    response_time = result.get("response_time", 0)
+
+    if config.webhook_payload:
+        # Use custom template with placeholder substitution
+        try:
+            payload = config.webhook_payload.format(
+                url=url,
+                status_code=status_code,
+                error=error_msg,
+                timestamp=timestamp,
+                response_time=response_time,
+            )
+        except (KeyError, ValueError) as e:
+            return {"success": False, "error": f"Invalid payload template: {e}"}
+    else:
+        # Default JSON payload
+        payload_dict = {
+            "event": "website_monitor_failure",
+            "url": url,
+            "status_code": status_code,
+            "error": error_msg,
+            "timestamp": timestamp,
+            "response_time": response_time,
+            "message": f"Website check failed for {url}: {error_msg}",
+        }
+        payload = json.dumps(payload_dict)
+
+    # Send webhook POST request
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": config.user_agent,
+    }
+
+    try:
+        req = Request(
+            config.webhook_url,
+            data=payload.encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urlopen(req, timeout=config.timeout) as response:
+            return {
+                "success": 200 <= response.getcode() < 300,
+                "status_code": response.getcode(),
+            }
+    except HTTPError as e:
+        return {"success": False, "error": f"HTTP error: {e.code} - {e.reason}"}
+    except URLError as e:
+        return {"success": False, "error": f"URL error: {e.reason}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # Background job utilities (stdlib-based daemonization via subprocess/PID files)
@@ -193,6 +274,16 @@ def start_background(url: str, config: Config) -> dict[str, Any]:
         # no --max-checks for ongoing bg
     ]
 
+    # Add SSL verification bypass if configured
+    if not config.verify_ssl:
+        cmd.append("--no-verify")
+
+    # Add webhook options if configured
+    if config.webhook_url:
+        cmd.extend(["--webhook-url", config.webhook_url])
+    if config.webhook_payload:
+        cmd.extend(["--webhook-payload", config.webhook_payload])
+
     # Detached: stdout/stderr to log , new session (daemonize)
     with open(log_file, "a") as log_f:
         process = subprocess.Popen(
@@ -214,6 +305,7 @@ def start_background(url: str, config: Config) -> dict[str, Any]:
         "config": {
             "interval": config.check_interval,
             "timeout": config.timeout,
+            "webhook_url": config.webhook_url,
         },
         "running": True,
     }
@@ -243,6 +335,73 @@ def resolve_job_id(identifier: str, config: Config) -> str:
 
     # Default/fallback: assume identifier is already job_id
     return identifier
+
+
+
+
+def update_job_config(
+    identifier: str,
+    config: Config,
+    interval: int | None = None,
+    timeout: int | None = None,
+    webhook_url: str | None = None,
+    webhook_payload: str | None = None,
+    verify_ssl: bool | None = None,
+) -> bool:
+    """Update configuration in the PID file for a running job.
+    
+    The running job (watch command) should periodically check this file
+    and update its internal state.
+    """
+    job_id = resolve_job_id(identifier, config)
+    pid_file = get_pid_file(config, job_id)
+    
+    if not pid_file.exists():
+        return False
+        
+    try:
+        job_data = json.loads(pid_file.read_text())
+    except json.JSONDecodeError:
+        return False
+        
+    job_config = job_data.get("config", {})
+    
+    updated = False
+    if interval is not None:
+        job_config["interval"] = interval
+        updated = True
+    if timeout is not None:
+        job_config["timeout"] = timeout
+        updated = True
+    if webhook_url is not None:
+        job_config["webhook_url"] = webhook_url if webhook_url else None
+        updated = True
+    if webhook_payload is not None:
+        job_config["webhook_payload"] = webhook_payload if webhook_payload else None
+        updated = True
+    if verify_ssl is not None:
+        job_config["verify_ssl"] = verify_ssl
+        updated = True
+        
+    if updated:
+        job_data["config"] = job_config
+        pid_file.write_text(json.dumps(job_data, indent=2))
+        return True
+        
+    return False
+
+
+def load_job_config(job_id: str, config: Config) -> dict[str, Any] | None:
+    """Load configuration from PID file for a given job_id."""
+    pid_file = get_pid_file(config, job_id)
+    if not pid_file.exists():
+        return None
+        
+    try:
+        job_data = json.loads(pid_file.read_text())
+        return job_data.get("config")
+    except Exception:
+        return None
 
 
 def stop_job(identifier: str, config: Config) -> bool:
