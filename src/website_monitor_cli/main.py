@@ -60,7 +60,7 @@ def main_callback(
     version: Annotated[
         bool,
         typer.Option(
-            "--version",
+            "--version, -V",
             help="Show version and exit.",
             callback=version_callback,
             is_eager=True,

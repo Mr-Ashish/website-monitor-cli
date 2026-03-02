@@ -11,6 +11,8 @@ requires-python = ">=3.11"
 dependencies = [
   "typer",
   "rich",
+  "textual",
+  "pydantic",
 ]
 
 [project.scripts]

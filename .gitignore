@@ -20,3 +20,8 @@ venv/
 # Coverage
 .coverage
 htmlcov/
+
+uv.lock
+
+.DS_Store
+core

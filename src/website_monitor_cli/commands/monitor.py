@@ -38,19 +38,23 @@ from website_monitor_cli.ui.console import (
     print_success,
     print_warning,  # For graceful empty details
 )
+from website_monitor_cli.ui.tui_form import run_monitor_form, run_quick_check_form, run_edit_form
 
-app = typer.Typer(help="Monitor website availability via HTTP status checks. Short aliases: c=check, w=watch, s=status, st=stop, l=logs, d=details, u=update (e.g., 'monitor c <url>') for less typing.")
+app = typer.Typer(
+    help="Monitor website availability via HTTP status checks. Short aliases: c=check, w=watch, s=status, st=stop, l=logs, d=details, u=update, a=add, f=form-check (e.g., 'monitor c <url>') for less typing.",
+    rich_markup_mode="rich",
+)
 
 
 @app.command()
 def check(
     url: str = typer.Argument(..., help="The website URL to check (must be valid http/https)."),
     timeout: int | None = typer.Option(
-        None, "--timeout", "-t", min=1, help="HTTP timeout in seconds (overrides default)."
+        None, "--timeout, -t", min=1, help="HTTP timeout in seconds (overrides default)."
     ),
     verify_ssl: bool = typer.Option(
         True,
-        "--verify-ssl/--no-verify",
+        "--verify-ssl, --no-verify",
         help="Verify SSL certificates for HTTPS requests. Use --no-verify to bypass SSL errors (e.g., self-signed certs).",
     ),
 ) -> None:
@@ -90,32 +94,28 @@ def watch(
     url: str = typer.Argument(..., help="The website URL to monitor continuously."),
     interval: int = typer.Option(
         None,
-        "--interval",
-        "-i",
+        "--interval, -i",
         min=5,
         help="Check interval in seconds (default from config).",
     ),
     timeout: int | None = typer.Option(
-        None, "--timeout", "-t", min=1, help="HTTP timeout in seconds."
+        None, "--timeout, -t", min=1, help="HTTP timeout in seconds."
     ),
     max_checks: int | None = typer.Option(
         None,
-        "--max-checks",
-        "-m",
+        "--max-checks, -m",
         min=1,
         help="Maximum checks before stopping (unlimited if not set).",
     ),
     background: bool = typer.Option(
         None,
-        "--background",
-        "-b",
+        "--background, -b",
         help="Run as background daemon job (uses PID/log files; enables stop/status/logs). "
         "Overrides config.background. See root --help for samples.",
     ),
     webhook_url: str | None = typer.Option(
         None,
-        "--webhook-url",
-        "-w",
+        "--webhook-url, -w",
         help="Webhook URL to notify on failure (POST request with failure details). "
         "Example: --webhook-url https://hooks.example.com/alert",
     ),
@@ -128,7 +128,7 @@ def watch(
     ),
     verify_ssl: bool = typer.Option(
         True,
-        "--verify-ssl/--no-verify",
+        "--verify-ssl, --no-verify",
         help="Verify SSL certificates for HTTPS requests. Use --no-verify to bypass SSL errors (e.g., self-signed certs).",
     ),
     # Internal/hidden for bg daemon sync (ensures parent/child use same job_id for logs/PID;
@@ -346,8 +346,7 @@ def update(
     job_id: str = typer.Argument(..., help="Job ID (or PID) from 'status' to update."),
     interval: int | None = typer.Option(
         None,
-        "--interval",
-        "-i",
+        "--interval, -i",
         min=5,
         help="New check interval in seconds.",
     ),
@@ -356,8 +355,7 @@ def update(
     ),
     webhook_url: str | None = typer.Option(
         None,
-        "--webhook-url",
-        "-w",
+        "--webhook-url, -w",
         help="New webhook URL (set to empty string "" to clear).",
     ),
     webhook_payload: str | None = typer.Option(
@@ -367,7 +365,7 @@ def update(
     ),
     verify_ssl: bool | None = typer.Option(
         None,
-        "--verify-ssl/--no-verify",
+        "--verify-ssl, --no-verify",
         help="Enable/disable SSL certificate verification.",
     ),
 ) -> None:
@@ -428,10 +426,10 @@ def update(
 def check_alias(
     url: str = typer.Argument(..., help="The website URL to check (must be valid http/https)."),
     timeout: int | None = typer.Option(
-        None, "--timeout", "-t", min=1, help="HTTP timeout in seconds (overrides default)."
+        None, "--timeout, -t", min=1, help="HTTP timeout in seconds (overrides default)."
     ),
     verify_ssl: bool = typer.Option(
-        False, "--verify-ssl/--no-verify", help="Verify SSL certificates for HTTPS requests.",
+        False, "--verify-ssl, --no-verify", help="Verify SSL certificates for HTTPS requests.",
     ),
 ) -> None:
     """Short alias for 'check' (c <url>)."""
@@ -442,25 +440,25 @@ def check_alias(
 def watch_alias(
     url: str = typer.Argument(..., help="The website URL to monitor continuously."),
     interval: int = typer.Option(
-        None, "--interval", "-i", min=5, help="Check interval in seconds (default from config).",
+        None, "--interval, -i", min=5, help="Check interval in seconds (default from config).",
     ),
     timeout: int | None = typer.Option(
-        None, "--timeout", "-t", min=1, help="HTTP timeout in seconds."
+        None, "--timeout, -t", min=1, help="HTTP timeout in seconds."
     ),
     max_checks: int | None = typer.Option(
-        None, "--max-checks", "-m", min=1, help="Maximum checks before stopping (unlimited if not set).",
+        None, "--max-checks, -m", min=1, help="Maximum checks before stopping (unlimited if not set).",
     ),
     background: bool = typer.Option(
-        None, "--background", "-b", help="Run as background daemon job (...).",
+        None, "--background, -b", help="Run as background daemon job (...).",
     ),
     webhook_url: str | None = typer.Option(
-        None, "--webhook-url", "-w", help="Webhook URL to notify on failure.",
+        None, "--webhook-url, -w", help="Webhook URL to notify on failure.",
     ),
     webhook_payload: str | None = typer.Option(
         None, "--webhook-payload", help="Custom JSON payload template for webhook.",
     ),
     verify_ssl: bool = typer.Option(
-        False, "--verify-ssl/--no-verify", help="Verify SSL certificates for HTTPS requests.",
+        False, "--verify-ssl, --no-verify", help="Verify SSL certificates for HTTPS requests.",
     ),
     # Internal job_id for bg sync (hidden, passed in alias too)
     job_id: str | None = typer.Option(
@@ -501,25 +499,190 @@ def details_alias(
     """Short alias for 'details' (d <job-id|pid>)."""
     details(job_id)
 
+@app.command()
+def edit(
+    job_id: str = typer.Argument(..., help="Job ID (or PID) from 'status' to edit."),
+) -> None:
+    """Edit configuration of a running background monitor job via TUI form."""
+    config = Config()
+    
+    # Load current config
+    current_config = load_job_config(job_id, config)
+    if not current_config:
+        print_error(f"Failed to load configuration for job {job_id}. Job may not exist.")
+        raise typer.Exit(1)
+    
+    # Add URL and Job ID to defaults for the form
+    defaults = current_config.copy()
+    # Need to find the URL from the job itself (pid file)
+    from website_monitor_cli.core import get_pid_file
+    import json
+    pid_file = get_pid_file(config, job_id)
+    if pid_file.exists():
+        try:
+            job_data = json.loads(pid_file.read_text())
+            defaults["url"] = job_data.get("url", "Unknown")
+        except Exception:
+            pass
+            
+    # Run the edit form
+    new_config = run_edit_form(defaults=defaults)
+    
+    if not new_config:
+        print_info("Edit cancelled.")
+        return
+        
+    print_info(f"Updating job {job_id}...")
+    
+    success = update_job_config(
+        job_id,
+        config,
+        interval=new_config.get("interval"),
+        timeout=new_config.get("timeout"),
+        webhook_url=new_config.get("webhook_url"),
+        webhook_payload=new_config.get("webhook_payload"),
+        verify_ssl=new_config.get("verify_ssl"),
+    )
+    
+    if success:
+        print_success(f"Job {job_id} configuration updated.")
+        print_info("The running job will pick up the changes shortly.")
+    else:
+        print_error(f"Failed to update job {job_id}. Job may not exist or PID file is corrupt.")
+        raise typer.Exit(1)
+
+
+@app.command("e")
+def edit_alias(
+    job_id: str = typer.Argument(..., help="Job ID (or PID) from 'status' to edit."),
+) -> None:
+    """Short alias for 'edit' (e <job-id|pid>)."""
+    edit(job_id)
+
+
 @app.command("u")
 def update_alias(
     job_id: str = typer.Argument(..., help="Job ID (or PID) from 'status' to update."),
     interval: int | None = typer.Option(
-        None, "--interval", "-i", min=5, help="New check interval in seconds.",
+        None, "--interval, -i", min=5, help="New check interval in seconds.",
     ),
     timeout: int | None = typer.Option(
-        None, "--timeout", "-t", min=1, help="New HTTP timeout in seconds."
+        None, "--timeout, -t", min=1, help="New HTTP timeout in seconds."
     ),
     webhook_url: str | None = typer.Option(
-        None, "--webhook-url", "-w", help="New webhook URL.",
+        None, "--webhook-url, -w", help="New webhook URL.",
     ),
     webhook_payload: str | None = typer.Option(
         None, "--webhook-payload", help="New webhook payload template.",
     ),
     verify_ssl: bool | None = typer.Option(
-        None, "--verify-ssl/--no-verify", help="Enable/disable SSL certificate verification.",
+        None, "--verify-ssl, --no-verify", help="Enable/disable SSL certificate verification.",
     ),
 ) -> None:
     """Short alias for 'update' (u <job-id|pid> [options])."""
     update(job_id, interval, timeout, webhook_url, webhook_payload, verify_ssl)
+
+
+@app.command()
+def add() -> None:
+    """Launch interactive TUI form to add a new monitor configuration.
+    
+    Opens a form-based interface where you can enter all monitoring settings
+    with real-time validation. The form validates URLs, intervals, timeouts,
+    and webhook settings using Pydantic.
+    
+    **Examples:**
+    
+    [green]Launch the form:[/green]
+      $ website-monitor monitor add
+    
+    [green]Short alias:[/green]
+      $ website-monitor monitor a
+    """
+    print_info("Launching monitor configuration form...")
+    
+    result = run_monitor_form()
+    
+    if result is None:
+        print_info("Form cancelled.")
+        raise typer.Exit(0)
+    
+    # Extract values from form result
+    url = result["url"]
+    interval = result["interval"]
+    timeout = result["timeout"]
+    max_checks = result.get("max_checks")
+    background = result["background"]
+    webhook_url = result.get("webhook_url")
+    webhook_payload = result.get("webhook_payload")
+    verify_ssl = result["verify_ssl"]
+    
+    print_success("Form submitted successfully!")
+    print_info(f"URL: {url}")
+    print_info(f"Interval: {interval}s, Timeout: {timeout}s")
+    if max_checks:
+        print_info(f"Max checks: {max_checks}")
+    if background:
+        print_info("Mode: Background daemon")
+    if webhook_url:
+        print_info(f"Webhook: {webhook_url}")
+    
+    # Now run the watch command with the form values
+    print_info("Starting monitor...")
+    watch(
+        url=url,
+        interval=interval,
+        timeout=timeout,
+        max_checks=max_checks,
+        background=background,
+        webhook_url=webhook_url,
+        webhook_payload=webhook_payload,
+        verify_ssl=verify_ssl,
+        job_id=None,
+    )
+
+
+@app.command("a")
+def add_alias() -> None:
+    """Short alias for 'add' (a)."""
+    add()
+
+
+@app.command()
+def form_check() -> None:
+    """Launch interactive TUI form for a quick single check.
+    
+    Opens a simplified form for one-time website checks with validation.
+    
+    **Examples:**
+    
+    [green]Launch the form:[/green]
+      $ website-monitor monitor form-check
+    
+    [green]Short alias:[/green]
+      $ website-monitor monitor f
+    """
+    print_info("Launching quick check form...")
+    
+    result = run_quick_check_form()
+    
+    if result is None:
+        print_info("Form cancelled.")
+        raise typer.Exit(0)
+    
+    # Extract values from form result
+    url = result["url"]
+    timeout = result["timeout"]
+    verify_ssl = result["verify_ssl"]
+    
+    print_success("Form submitted successfully!")
+    
+    # Run the check command with the form values
+    check(url=url, timeout=timeout, verify_ssl=verify_ssl)
+
+
+@app.command("f")
+def form_check_alias() -> None:
+    """Short alias for 'form-check' (f)."""
+    form_check()
 
